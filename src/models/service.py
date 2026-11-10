@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 
+from .validation import to_decimal, validate_text
+
 
 class PricingType(Enum):
     """Define the two ways salon services are priced."""
@@ -13,7 +15,7 @@ class PricingType(Enum):
     VARIABLE = "variable"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Service:
     """Represent a service offered by the salon."""
 
@@ -26,14 +28,9 @@ class Service:
     def __post_init__(self) -> None:
         """Validate service details."""
 
-        if not self.service_id.strip():
-            raise ValueError("Service ID is required.")
-
-        if not self.name.strip():
-            raise ValueError("Service name is required.")
-
-        if not self.department.strip():
-            raise ValueError("Department is required.")
+        validate_text(self.service_id, "Service ID")
+        validate_text(self.name, "Service name")
+        validate_text(self.department, "Department")
 
         if not isinstance(self.pricing_type, PricingType):
             raise ValueError("Invalid pricing type.")
@@ -42,8 +39,10 @@ class Service:
             if self.fixed_price is None:
                 raise ValueError("A fixed-price service needs a price.")
 
-            if self.fixed_price <= 0:
+            price = to_decimal(self.fixed_price, "Fixed price")
+            if price <= 0:
                 raise ValueError("The price must be positive.")
+            object.__setattr__(self, "fixed_price", price)
 
         elif self.fixed_price is not None:
             raise ValueError(

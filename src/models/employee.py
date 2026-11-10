@@ -3,8 +3,10 @@
 
 from dataclasses import dataclass
 
+from .validation import validate_text
 
-@dataclass
+
+@dataclass(frozen=True)
 class Employee:
     """Represent a salon employee whose productivity is tracked."""
 
@@ -16,11 +18,8 @@ class Employee:
     def __post_init__(self) -> None:
         """Validate employee details when an object is created."""
 
-        if not self.employee_id.strip():
-            raise ValueError("Employee ID is required.")
-
-        if not self.name.strip():
-            raise ValueError("Employee name is required.")
-
-        if not self.department.strip():
-            raise ValueError("Department is required.")
+        validate_text(self.employee_id, "Employee ID")
+        validate_text(self.name, "Employee name")
+        validate_text(self.department, "Department")
+        if not isinstance(self.active, bool):
+            raise ValueError("Active must be a boolean.")
