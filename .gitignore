@@ -3,3 +3,11 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 *.py[cod]
+
+# Local database and Jupyter files
+salon.sqlite3
+*.sqlite3
+.ipynb_checkpoints/
+.virtual_documents/
+__pycache__/
+.venv/
