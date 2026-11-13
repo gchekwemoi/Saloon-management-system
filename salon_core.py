@@ -197,6 +197,61 @@ class SalonDatabase:
                     amount TEXT NOT NULL, allowance_id INTEGER NOT NULL
                     REFERENCES allowances(allowance_id));
             ''')
+            db.executescript('''
+                CREATE TABLE IF NOT EXISTS salon_settings (
+                    setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS cashiers (
+                    cashier_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1);
+            ''')
+            # Safe migration: keep all existing sales, payments and expenses.
+            for table in ('sales', 'payments', 'expenses'):
+                columns = {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}
+                if 'cashier_id' not in columns:
+                    db.execute(f'ALTER TABLE {table} ADD COLUMN cashier_id TEXT REFERENCES cashiers(cashier_id)')
+
+    def salon_name(self):
+        with self.connect() as db:
+            row = db.execute('SELECT setting_value FROM salon_settings WHERE setting_key=?', ('salon_name',)).fetchone()
+            return row['setting_value'] if row else 'Saloon Management System'
+
+    def set_salon_name(self, name):
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError('Salon name is required')
+        with self.connect() as db:
+            db.execute('INSERT INTO salon_settings (setting_key, setting_value) VALUES (?, ?) '
+                       'ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value',
+                       ('salon_name', name.strip()))
+
+    def add_cashier(self, cashier_id, name):
+        if not all(isinstance(x, str) and x.strip() for x in (cashier_id, name)):
+            raise ValueError('Cashier ID and name are required')
+        with self.connect() as db:
+            db.execute('INSERT INTO cashiers (cashier_id, name, active) VALUES (?, ?, 1)',
+                       (cashier_id.strip(), name.strip()))
+
+    def cashiers(self, active_only=False):
+        with self.connect() as db:
+            query = 'SELECT * FROM cashiers' + (' WHERE active=1' if active_only else '') + ' ORDER BY name'
+            return [dict(row) for row in db.execute(query)]
+
+    def cashier_name(self, cashier_id):
+        if not cashier_id:
+            return 'Not recorded'
+        with self.connect() as db:
+            row = db.execute('SELECT name FROM cashiers WHERE cashier_id=?', (cashier_id,)).fetchone()
+            return row['name'] if row else 'Unknown cashier'
+
+    def _check_cashier(self, cashier_id):
+        if cashier_id is None:
+            return  # Backward compatible with previous coursework tests.
+        if not isinstance(cashier_id, str) or not cashier_id.strip():
+            raise ValueError('Select a cashier')
+        with self.connect() as db:
+            row = db.execute('SELECT active FROM cashiers WHERE cashier_id=?', (cashier_id,)).fetchone()
+            if row is None or not row['active']:
+                raise ValueError('Select a registered, active cashier')
 
     def add_employee(self, employee_id, name, department, wage_rate):
         if not all(isinstance(v, str) and v.strip() for v in (employee_id, name, department)):
@@ -212,13 +267,14 @@ class SalonDatabase:
             query = 'SELECT * FROM employees' + (' WHERE active=1' if active_only else '') + ' ORDER BY name'
             return [dict(row) for row in db.execute(query)]
 
-    def record_sale(self, sale_id, sale_date, kind, description, transaction: Transaction, assignments=None):
+    def record_sale(self, sale_id, sale_date, kind, description, transaction: Transaction, assignments=None, cashier_id=None):
         if not all(isinstance(v, str) and v.strip() for v in (sale_id, description)):
             raise ValueError('Sale ID and description are required')
         if not isinstance(sale_date, date):
             raise ValueError('Sale date required')
         if kind not in ('Service', 'Product') or not isinstance(transaction, Transaction):
             raise ValueError('Invalid sale type')
+        self._check_cashier(cashier_id)
         assignments = assignments or []
         if kind == 'Service' and not assignments:
             raise ValueError('Service sales require employee assignments')
@@ -247,16 +303,19 @@ class SalonDatabase:
             if shares != 100:
                 raise ValueError('Employee contributions must total exactly 100%')
         with self.connect() as db:
-            db.execute('INSERT INTO sales VALUES (?,?,?,?,?,?)',
-                       (sale_id.strip(), sale_date.isoformat(), kind, description.strip(), str(total), str(wages)))
+            db.execute('INSERT INTO sales (sale_id, sale_date, kind, description, amount, expected_wages, cashier_id) VALUES (?,?,?,?,?,?,?)',
+                       (sale_id.strip(), sale_date.isoformat(), kind, description.strip(), str(total), str(wages), cashier_id))
             db.executemany('INSERT INTO assignments VALUES (?,?,?,?,?,?)', records)
         return total
 
     def sales(self):
         with self.connect() as db:
-            return [dict(x) for x in db.execute('SELECT * FROM sales ORDER BY sale_date DESC, sale_id DESC')]
+            return [dict(x) for x in db.execute('''SELECT s.*, COALESCE(c.name,'Not recorded') AS cashier_name
+                 FROM sales s LEFT JOIN cashiers c ON c.cashier_id=s.cashier_id
+                 ORDER BY s.sale_date DESC, s.sale_id DESC''')]
 
-    def add_payment(self, sale_id, payment: Payment, paid_on=None):
+    def add_payment(self, sale_id, payment: Payment, paid_on=None, cashier_id=None):
+        self._check_cashier(cashier_id)
         paid_on = paid_on or date.today()
         with self.connect() as db:
             row = db.execute('SELECT amount FROM sales WHERE sale_id=?', (sale_id,)).fetchone()
@@ -265,12 +324,26 @@ class SalonDatabase:
             paid = sum((money(x[0]) for x in db.execute('SELECT amount FROM payments WHERE sale_id=?', (sale_id,))), Decimal('0'))
             if paid + payment.amount > money(row['amount']):
                 raise ValueError('Payment exceeds outstanding balance')
-            db.execute('INSERT INTO payments (sale_id, amount, method, reference, paid_on) VALUES (?,?,?,?,?)',
-                       (sale_id, str(payment.amount), payment.method, payment.reference, paid_on.isoformat()))
+            db.execute('INSERT INTO payments (sale_id, amount, method, reference, paid_on, cashier_id) VALUES (?,?,?,?,?,?)',
+                       (sale_id, str(payment.amount), payment.method, payment.reference, paid_on.isoformat(), cashier_id))
 
     def allowances(self):
         with self.connect() as db:
             return [dict(x) for x in db.execute('SELECT * FROM allowances ORDER BY allowance_id DESC')]
+
+    def payments(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('''
+                SELECT p.*, COALESCE(c.name, 'Not recorded') AS cashier_name
+                FROM payments p LEFT JOIN cashiers c ON c.cashier_id=p.cashier_id
+                ORDER BY p.paid_on DESC, p.payment_id DESC''')]
+
+    def expenses(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('''
+                SELECT e.*, COALESCE(c.name, 'Not recorded') AS cashier_name
+                FROM expenses e LEFT JOIN cashiers c ON c.cashier_id=e.cashier_id
+                ORDER BY e.expense_date DESC, e.expense_id DESC''')]
 
     def approve_allowance(self, amount, note=''):
         amount = money(amount)
@@ -288,15 +361,16 @@ class SalonDatabase:
             spent = sum((money(x[0]) for x in db.execute('SELECT amount FROM expenses WHERE allowance_id=?', (allowance_id,))), Decimal('0'))
             return ExpenseAllowance(money(row['amount']), spent).remaining_balance()
 
-    def add_expense(self, allowance_id, description, amount):
+    def add_expense(self, allowance_id, description, amount, cashier_id=None):
+        self._check_cashier(cashier_id)
         if not isinstance(description, str) or not description.strip():
             raise ValueError('Expense description required')
         amount = money(amount)
         if amount <= 0 or amount > self.remaining_allowance(allowance_id):
             raise ValueError('Expense must be positive and within remaining allowance')
         with self.connect() as db:
-            db.execute('INSERT INTO expenses (expense_date,description,amount,allowance_id) VALUES (?,?,?,?)',
-                       (date.today().isoformat(), description.strip(), str(amount), allowance_id))
+            db.execute('INSERT INTO expenses (expense_date,description,amount,allowance_id,cashier_id) VALUES (?,?,?,?,?)',
+                       (date.today().isoformat(), description.strip(), str(amount), allowance_id, cashier_id))
 
     def summary(self):
         with self.connect() as db:
@@ -326,3 +400,14 @@ class SalonDatabase:
               SUM(CAST(a.expected_wage AS REAL)) AS expected_wages
               FROM assignments a JOIN employees e ON a.employee_id=e.employee_id
               GROUP BY e.employee_id ORDER BY revenue DESC''')]
+
+    def cashier_activity(self):
+        with self.connect() as db:
+            return [dict(x) for x in db.execute('''
+                SELECT c.cashier_id, c.name,
+                  (SELECT COUNT(*) FROM sales s WHERE s.cashier_id=c.cashier_id) AS sales_count,
+                  (SELECT COALESCE(SUM(CAST(s.amount AS REAL)),0) FROM sales s WHERE s.cashier_id=c.cashier_id) AS charges,
+                  (SELECT COALESCE(SUM(CAST(p.amount AS REAL)),0) FROM payments p WHERE p.cashier_id=c.cashier_id) AS receipts,
+                  (SELECT COUNT(*) FROM payments p WHERE p.cashier_id=c.cashier_id) AS payment_count,
+                  (SELECT COALESCE(SUM(CAST(e.amount AS REAL)),0) FROM expenses e WHERE e.cashier_id=c.cashier_id) AS expenses
+                FROM cashiers c ORDER BY c.name''')]
