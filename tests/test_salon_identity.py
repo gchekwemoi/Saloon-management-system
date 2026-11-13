@@ -3,7 +3,8 @@ from datetime import date
 from decimal import Decimal
 import sqlite3
 import pytest
-from salon_core import SalonDatabase, ServiceTransaction, Payment
+from auth_helpers import SalonDatabase
+from salon_core import  ServiceTransaction, Payment
 
 
 def test_identity_and_cashier_attribution(tmp_path):

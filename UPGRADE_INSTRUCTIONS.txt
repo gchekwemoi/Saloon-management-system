@@ -1,0 +1,31 @@
+SALON MANAGEMENT SYSTEM — THEME + CASHIER UPGRADE
+
+This ZIP contains ONLY replacement/additional files, not your whole project:
+- app.py                       (REPLACE existing file)
+- salon_core.py                (REPLACE existing file)
+- tests/test_salon_identity.py (ADD new test file)
+
+BEFORE COPYING:
+1. Stop Streamlit in the PowerShell terminal using Ctrl+C.
+2. Make a backup copy of your current project folder (or at minimum app.py, salon_core.py, and salon.sqlite3).
+3. Extract the ZIP and copy its app.py and salon_core.py to the same folder as your existing app.py, allowing replacement of those two files only.
+4. Copy tests/test_salon_identity.py into your existing tests folder.
+5. Do not delete salon.sqlite3; the code adds cashier columns automatically and keeps old records.
+
+RUN:
+python -m pytest -q
+python -m streamlit run app.py
+
+IN APP:
+1. Choose Owner/Manager -> Settings & Cashiers.
+2. Enter your salon display name and click Save salon name.
+3. Register at least two cashiers, e.g. C001 / Cashier One and C002 / Cashier Two.
+4. Switch to Cashier and choose the CASHIER ON DUTY from the sidebar.
+5. Record service or product sales/payments; reports and register identify the cashier.
+
+IMPORTANT LIMITATIONS:
+- Cashier selection and role selection are for classroom DEMONSTRATION, not secure login.
+- Existing historical transactions show 'Not recorded' when they do not have a cashier.
+- The sales cashier is whoever entered the sale; the payment cashier is whoever received payment. These can differ.
+- Keep salon.sqlite3 private; DO NOT upload it to your public GitHub repository.
+- The theme uses an online Google font as a visual enhancement; it falls back to standard fonts offline.

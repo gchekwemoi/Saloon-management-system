@@ -1,8 +1,9 @@
 from datetime import date
 from decimal import Decimal
 import pytest
+from auth_helpers import SalonDatabase
 from salon_core import (ServiceTransaction, ProductTransaction, Transaction, Payment,
-                        ExpenseAllowance, SalonDatabase, MovingAverageForecaster, Reconciliation)
+                        ExpenseAllowance, MovingAverageForecaster, Reconciliation)
 
 
 def test_polymorphism():
@@ -58,3 +59,37 @@ def test_payment_cannot_exceed_sale(tmp_path):
 
 def test_moving_average():
     assert MovingAverageForecaster().forecast([Decimal('10'), Decimal('20')], 2) == [Decimal('15')] * 2
+
+
+def test_forecast_history_ends_yesterday_and_excludes_future(tmp_path):
+    from datetime import timedelta
+
+    db = SalonDatabase(tmp_path / 'forecast.sqlite3')
+    yesterday = date.today() - timedelta(days=1)
+    db.record_sale('Y', yesterday, 'Product', 'Oil', ProductTransaction(1, '100'))
+    db.record_sale('T', date.today(), 'Product', 'Oil', ProductTransaction(1, '200'))
+    db.record_sale('F', date.today() + timedelta(days=1), 'Product', 'Oil', ProductTransaction(1, '300'))
+    history = db.daily_revenue(7)
+    assert history[-1] == (yesterday, Decimal('100'))
+    assert sum(amount for _, amount in history) == 100
+    with pytest.raises(ValueError):
+        db.daily_revenue(0)
+
+
+def test_sale_type_matches_transaction(tmp_path):
+    db = SalonDatabase(tmp_path / 'types.sqlite3')
+    with pytest.raises(ValueError, match='match the sale type'):
+        db.record_sale('P', date.today(), 'Product', 'Oil', ServiceTransaction(100))
+    assert db.sales() == []
+
+
+def test_reports_keep_decimal_precision(tmp_path):
+    db = SalonDatabase(tmp_path / 'precision.sqlite3')
+    db.add_cashier('C', 'Cashier')
+    db.add_employee('E', 'Employee', 'Hair', 30)
+    for sale_id, amount in [('S1', '0.1'), ('S2', '0.2')]:
+        db.record_sale(sale_id, date.today(), 'Service', 'Hair', ServiceTransaction(amount), [('E', 100)], cashier_id='C')
+    employee = db.productivity()[0]
+    assert employee['revenue'] == Decimal('0.3')
+    assert employee['expected_wages'] == Decimal('0.09')
+    assert db.cashier_activity()[0]['charges'] == Decimal('0.3')
